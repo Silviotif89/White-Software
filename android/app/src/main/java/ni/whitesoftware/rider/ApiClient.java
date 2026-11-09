@@ -2,6 +2,9 @@ package ni.whitesoftware.rider;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
+import android.util.Base64;
 
 import org.json.JSONObject;
 
@@ -11,13 +14,20 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
 
 final class ApiClient {
     private static final String PREFS = "white_rider";
     private static final String KEY_URL = "server_url";
-    private static final String KEY_COOKIE = "session_cookie";
+    private static final String KEY_COOKIE = "session_cookie_encrypted";
     private static final String KEY_EVENT_CURSOR = "event_cursor";
+    private static final String KEYSTORE_ALIAS = "white_rider_session";
     private ApiClient() { }
 
     static SharedPreferences prefs(Context context) {
@@ -37,7 +47,10 @@ final class ApiClient {
     }
 
     static String cookie(Context context) {
-        return prefs(context).getString(KEY_COOKIE, "");
+        String encrypted = prefs(context).getString(KEY_COOKIE, "");
+        if (encrypted.isEmpty()) return "";
+        try { return decrypt(encrypted); }
+        catch (Exception ignored) { clearSession(context); return ""; }
     }
 
     static boolean hasCookie(Context context) {
@@ -45,7 +58,7 @@ final class ApiClient {
     }
 
     static void clearSession(Context context) {
-        prefs(context).edit().remove(KEY_COOKIE).remove(KEY_EVENT_CURSOR).apply();
+        prefs(context).edit().remove(KEY_COOKIE).remove("session_cookie").remove(KEY_EVENT_CURSOR).apply();
     }
 
     static void saveEventCursor(Context context, String cursor) {
@@ -79,7 +92,7 @@ final class ApiClient {
                 String setCookie = connection.getHeaderField("Set-Cookie");
                 if (setCookie != null) {
                     String value = setCookie.split(";", 2)[0].trim();
-                    if (value.startsWith("white_session=")) prefs(context).edit().putString(KEY_COOKIE, value).apply();
+                    if (value.startsWith("white_session=")) prefs(context).edit().putString(KEY_COOKIE, encrypt(value)).apply();
                 }
             }
             InputStream stream = status >= 400 ? connection.getErrorStream() : connection.getInputStream();
@@ -115,6 +128,45 @@ final class ApiClient {
         String value = input == null ? "" : input.trim();
         while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
         return value;
+    }
+
+    private static String encrypt(String plain) throws Exception {
+        SecretKey key = keyStoreKey();
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, key);
+        byte[] iv = cipher.getIV();
+        byte[] encrypted = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
+        byte[] packed = ByteBuffer.allocate(1 + iv.length + encrypted.length).put((byte) iv.length).put(iv).put(encrypted).array();
+        return Base64.encodeToString(packed, Base64.NO_WRAP);
+    }
+
+    private static String decrypt(String encoded) throws Exception {
+        byte[] packed = Base64.decode(encoded, Base64.NO_WRAP);
+        ByteBuffer buffer = ByteBuffer.wrap(packed);
+        int ivLength = buffer.get() & 0xFF;
+        if (ivLength < 8 || ivLength > 32 || buffer.remaining() <= ivLength) throw new IOException("La sesión guardada no es válida.");
+        byte[] iv = new byte[ivLength];
+        buffer.get(iv);
+        byte[] encrypted = new byte[buffer.remaining()];
+        buffer.get(encrypted);
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.DECRYPT_MODE, keyStoreKey(), new GCMParameterSpec(128, iv));
+        return new String(cipher.doFinal(encrypted), StandardCharsets.UTF_8);
+    }
+
+    private static SecretKey keyStoreKey() throws Exception {
+        KeyStore keyStore = KeyStore.getInstance("AndroidKeyStore");
+        keyStore.load(null);
+        if (!keyStore.containsAlias(KEYSTORE_ALIAS)) {
+            KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+            generator.init(new KeyGenParameterSpec.Builder(KEYSTORE_ALIAS, KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setRandomizedEncryptionRequired(true)
+                    .build());
+            generator.generateKey();
+        }
+        return (SecretKey) keyStore.getKey(KEYSTORE_ALIAS, null);
     }
 
     static final class ApiException extends IOException {
