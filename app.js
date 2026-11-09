@@ -57,6 +57,7 @@
     section: 'inicio',
     category: 'Todo',
     storeSearch: '',
+    cartOpen: false,
     orderSearch: '',
     productSearch: '',
     cart: {},
@@ -67,6 +68,8 @@
     geoMessage: 'La ubicación aún no está activa. Iniciá una entrega para compartirla desde este teléfono.'
   };
   let geoWatchId = null;
+  let modalReturnFocus = null;
+  let cartReturnFocus = null;
 
   const app = $('#app');
   if (!app) return;
@@ -101,12 +104,14 @@
     if (view !== 'reparto') { stopLocationWatch(); ui.routeOrderId = null; }
     ui.view = view;
     ui.modal = null;
+    ui.cartOpen = false;
     const url = new URL(location.href);
     url.searchParams.set('vista', view);
     if (view !== 'seguimiento') url.searchParams.delete('pedido');
     history.replaceState({}, '', url);
     render();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    focusPageStart();
+    window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   }
 
   function setSection(section) {
@@ -115,6 +120,8 @@
     ui.productSearch = '';
     closeSidebar();
     render();
+    if (window.matchMedia('(max-width: 820px)').matches) $('.mobile-menu')?.focus();
+    else $('.nav-item.active')?.focus();
   }
 
   function toast(message) {
@@ -144,7 +151,8 @@
   }
 
   function navLink(section, icon, label) {
-    return `<button class="nav-item ${ui.section === section ? 'active' : ''}" data-action="section" data-section="${section}"><span class="nav-icon" aria-hidden="true">${icon}</span><span>${label}</span></button>`;
+    const active = ui.section === section;
+    return `<button class="nav-item ${active ? 'active' : ''}" data-action="section" data-section="${section}"${active ? ' aria-current="page"' : ''}><span class="nav-icon" aria-hidden="true">${icon}</span><span>${label}</span></button>`;
   }
 
   function sidebar() {
@@ -178,21 +186,21 @@
 
   function adminHeader() {
     return `<header class="topbar">
-      <button class="mobile-menu" data-action="toggle-sidebar" aria-label="Abrir menú">☰</button>
+      <button class="mobile-menu" data-action="toggle-sidebar" aria-controls="sidebar" aria-expanded="false" aria-label="Abrir menú">☰</button>
       <div class="topbar-title"><p class="eyebrow">Panel del comercio</p><h1>${pageTitle()}</h1></div>
       <div class="topbar-actions"><span class="current-date">Managua · ${new Intl.DateTimeFormat('es-NI', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date())}</span><button class="btn btn-secondary" data-action="set-view" data-view="tienda">Abrir tienda ↗</button></div>
     </header>`;
   }
 
   function statCard(label, value, icon, foot) {
-    return `<article class="stat-card"><div class="stat-top"><span>${label}</span><span class="stat-icon">${icon}</span></div><div class="stat-value">${value}</div><div class="stat-foot">${foot}</div></article>`;
+    return `<article class="stat-card"><div class="stat-top"><span>${label}</span><span class="stat-icon" aria-hidden="true">${icon}</span></div><div class="stat-value">${value}</div><div class="stat-foot">${foot}</div></article>`;
   }
 
   function ordersToday() { return data.orders.length + 18; }
 
   function dashboard() {
     const latest = data.orders.slice(0, 4);
-    return `<div class="page-heading"><div><h2>Buen día, Silvio</h2><p>Así marcha la operación de ${esc(data.company.name)}.</p></div><button class="btn btn-primary" data-action="section" data-section="pedidos">Ver pedidos <span aria-hidden="true">→</span></button></div>
+    return `<div class="page-heading"><div><h2>Así marcha tu comercio hoy</h2><p>Resumen de la operación de ${esc(data.company.name)}.</p></div><button class="btn btn-primary" data-action="section" data-section="pedidos">Ver pedidos <span aria-hidden="true">→</span></button></div>
       ${demoStrip()}
       <div class="stats-grid">
         ${statCard('Pedidos de hoy', ordersToday(), '▣', '<strong>+12%</strong> frente a ayer · demo')}
@@ -214,12 +222,12 @@
 
   function orderTable(orders, compact = false) {
     if (!orders.length) return `<div class="empty-state"><strong>No hay pedidos que coincidan</strong>Cambiá el filtro o recibí un nuevo pedido desde la tienda demo.</div>`;
-    return `<div class="table-wrap"><table class="data-table"><thead><tr><th>Pedido</th><th>Cliente</th><th>Zona</th><th>Total</th><th>Estado</th><th>${compact ? '' : 'Pago'}</th><th></th></tr></thead><tbody>${orders.map(order=>`<tr>
-      <td><span class="order-id">${esc(order.id)}</span><div class="cell-sub">${esc(order.time || 'Recién')}</div></td>
-      <td><span class="customer-cell"><span class="mini-avatar">${initials(order.customer)}</span><span><span class="cell-main">${esc(order.customer)}</span><span class="cell-sub">${esc(order.phone)}</span></span></span></td>
-      <td>${esc(order.area || 'Managua')}</td><td><span class="cell-main">${money(order.total)}</span></td><td>${pill(order.status)}</td>
-      <td>${compact ? '' : `<span class="cell-main">${esc(order.paymentMethod || 'Tarjeta')}</span><span class="cell-sub">${esc(order.paymentStatus || 'Pendiente')}</span>`}</td>
-      <td><button class="btn btn-small ${compact ? 'btn-secondary' : 'btn-quiet'}" data-action="advance-order" data-id="${esc(order.id)}">${compact ? 'Ver' : 'Siguiente →'}</button></td>
+    return `<div class="table-wrap"><table class="data-table orders-table ${compact ? 'is-compact' : ''}" aria-label="Pedidos"><caption class="sr-only">Pedidos del comercio</caption><thead><tr><th>Pedido</th><th>Cliente</th><th>Zona</th><th>Total</th><th>Estado</th><th>${compact ? '' : 'Pago'}</th><th></th></tr></thead><tbody>${orders.map(order=>`<tr>
+      <td data-label="Pedido"><span class="order-id">${esc(order.id)}</span><div class="cell-sub">${esc(order.time || 'Recién')}</div></td>
+      <td data-label="Cliente"><span class="customer-cell"><span class="mini-avatar" aria-hidden="true">${initials(order.customer)}</span><span><span class="cell-main">${esc(order.customer)}</span><span class="cell-sub">${esc(order.phone)}</span></span></span></td>
+      <td data-label="Zona">${esc(order.area || 'Managua')}</td><td data-label="Total"><span class="cell-main">${money(order.total)}</span></td><td data-label="Estado">${pill(order.status)}</td>
+      <td data-label="Pago">${compact ? '' : `<span class="cell-main">${esc(order.paymentMethod || 'Tarjeta')}</span><span class="cell-sub">${esc(order.paymentStatus || 'Pendiente')}</span>`}</td>
+      <td data-label="Acción"><button class="btn btn-small ${compact ? 'btn-secondary' : 'btn-quiet'}" data-action="advance-order" data-id="${esc(order.id)}">${compact ? 'Ver pedido' : 'Siguiente estado →'}</button></td>
     </tr>`).join('')}</tbody></table></div>`;
   }
 
@@ -227,7 +235,7 @@
     const query = ui.orderSearch.toLowerCase().trim();
     const list = data.orders.filter(order => `${order.id} ${order.customer} ${order.area} ${order.status}`.toLowerCase().includes(query));
     return `<div class="page-heading"><div><h2>Controlá cada pedido</h2><p>Confirmá, prepará y asigná la entrega desde un solo lugar.</p></div><button class="btn btn-secondary" data-action="export-orders">Descargar CSV ↓</button></div>${demoStrip()}
-      <section class="panel"><div class="panel-header"><div><h3>Todos los pedidos</h3><p>${data.orders.length} pedidos guardados en este navegador</p></div><div class="search-field"><span>⌕</span><input id="order-search" type="search" placeholder="Buscar código, cliente o zona" value="${esc(ui.orderSearch)}" autocomplete="off"></div></div>${orderTable(list, false)}</section>
+      <section class="panel"><div class="panel-header"><div><h3>Todos los pedidos</h3><p>${data.orders.length} pedidos guardados en este navegador</p></div><div class="search-field"><span aria-hidden="true">⌕</span><input id="order-search" type="search" aria-label="Buscar pedido por código, cliente o zona" placeholder="Código, cliente o zona" value="${esc(ui.orderSearch)}" autocomplete="off"></div></div>${orderTable(list, false)}</section>
       <p class="field-help" style="margin:12px 2px">Al avanzar un pedido, la demo cambia el estado localmente. En el sistema final cada cambio tendrá usuario, hora y sincronización con el comercio.</p>`;
   }
 
@@ -235,8 +243,8 @@
     const query = ui.productSearch.toLowerCase().trim();
     const list = data.products.filter(p => `${p.name} ${p.category}`.toLowerCase().includes(query));
     return `<div class="page-heading"><div><h2>Tu catálogo listo para compartir</h2><p>Administrá productos y disponibilidad de tu tienda.</p></div><button class="btn btn-primary" data-action="add-product">＋ Agregar producto</button></div>${demoStrip()}
-      <div class="section-toolbar"><div class="toolbar-left"><div class="search-field"><span>⌕</span><input id="product-search" type="search" placeholder="Buscar producto" value="${esc(ui.productSearch)}" autocomplete="off"></div></div><div class="toolbar-right"><span class="status-pill status-green">${data.products.filter(p=>p.active).length} disponibles</span></div></div>
-      <div class="product-grid">${list.map(product=>`<article class="product-admin-card"><span class="product-thumb">${esc(product.icon)}</span><span><span class="product-name">${esc(product.name)}</span><span class="product-meta">${esc(product.category)} · ${esc(product.stock)} en inventario</span><span class="product-price">${money(product.price)}</span></span><button class="toggle ${product.active ? 'on' : ''}" role="switch" aria-checked="${product.active}" aria-label="Cambiar disponibilidad de ${esc(product.name)}" data-action="toggle-product" data-id="${esc(product.id)}"></button></article>`).join('')}</div>${list.length ? '' : `<div class="panel empty-state"><strong>No encontramos productos</strong>Probá otro nombre o categoría.</div>`}`;
+      <div class="section-toolbar"><div class="toolbar-left"><div class="search-field"><span aria-hidden="true">⌕</span><input id="product-search" type="search" aria-label="Buscar producto por nombre o categoría" placeholder="Buscar producto" value="${esc(ui.productSearch)}" autocomplete="off"></div></div><div class="toolbar-right"><span class="status-pill status-green">${data.products.filter(p=>p.active).length} disponibles</span></div></div>
+      <div class="product-grid">${list.map(product=>`<article class="product-admin-card"><span class="product-thumb" aria-hidden="true">${esc(product.icon)}</span><span><span class="product-name">${esc(product.name)}</span><span class="product-meta">${esc(product.category)} · ${esc(product.stock)} en inventario</span><span class="product-price">${money(product.price)}</span></span><button class="toggle ${product.active ? 'on' : ''}" role="switch" aria-checked="${product.active}" aria-label="${product.active ? 'Pausar' : 'Activar'} disponibilidad de ${esc(product.name)}" data-action="toggle-product" data-id="${esc(product.id)}"></button></article>`).join('')}</div>${list.length ? '' : `<div class="panel empty-state"><strong>No encontramos productos</strong>Probá otro nombre o categoría.</div>`}`;
   }
 
   function couriersPage() {
@@ -294,18 +302,24 @@
 
   function cartPanel() {
     const items = cartItems();
-    return `<aside class="cart-panel"><div class="cart-head"><strong>Tu pedido</strong><span class="cart-count">${cartCount()}</span></div><div class="cart-items">${items.length ? items.map(item=>`<div class="cart-line"><span class="cart-line-icon">${esc(item.icon)}</span><span><span class="cart-line-title">${esc(item.name)}</span><span class="cart-line-price">${money(item.price * item.qty)}</span></span><span class="quantity-controls"><button aria-label="Quitar una unidad" data-action="cart-qty" data-id="${esc(item.id)}" data-delta="-1">−</button><span>${item.qty}</span><button aria-label="Agregar una unidad" data-action="cart-qty" data-id="${esc(item.id)}" data-delta="1">+</button></span></div>`).join('') : `<div class="cart-empty"><span class="cart-empty-icon">🛍️</span>Tu carrito está vacío.<br>Agregá algo rico para empezar.</div>`}</div><div class="cart-summary"><div class="summary-row"><span>Subtotal</span><span>${money(cartSubtotal())}</span></div><div class="summary-row"><span>Envío</span><span>${items.length ? money(data.company.deliveryFee) : money(0)}</span></div><div class="summary-row total"><span>Total</span><span>${money(cartSubtotal() + (items.length ? data.company.deliveryFee : 0))}</span></div><button class="btn btn-primary cart-checkout" data-action="checkout" ${items.length ? '' : 'disabled'}>Continuar al pedido →</button><p class="cart-footnote">El costo de entrega se muestra antes de confirmar.</p></div></aside>`;
+    const total = cartSubtotal() + (items.length ? data.company.deliveryFee : 0);
+    return `<aside class="cart-panel ${ui.cartOpen ? 'is-open' : ''}" id="cart-panel" ${ui.cartOpen ? 'role="dialog" aria-modal="true"' : 'role="complementary"'} aria-label="Tu pedido" tabindex="-1">
+      <div class="cart-head"><div><span class="cart-kicker">Resumen de compra</span><strong>Tu pedido <span class="cart-count">${cartCount()}</span></strong></div><button class="cart-close" type="button" data-action="close-cart" aria-label="Cerrar carrito">×</button></div>
+      <div class="cart-items">${items.length ? items.map(item=>`<div class="cart-line"><span class="cart-line-icon" aria-hidden="true">${esc(item.icon)}</span><span><span class="cart-line-title">${esc(item.name)}</span><span class="cart-line-price">${money(item.price)} cada uno</span></span><span class="quantity-controls"><button type="button" aria-label="Quitar una unidad de ${esc(item.name)}" data-action="cart-qty" data-id="${esc(item.id)}" data-delta="-1">−</button><span aria-live="polite">${item.qty}</span><button type="button" aria-label="Agregar una unidad de ${esc(item.name)}" data-action="cart-qty" data-id="${esc(item.id)}" data-delta="1">+</button></span></div>`).join('') : `<div class="cart-empty"><span class="cart-empty-icon" aria-hidden="true">🛍️</span>Tu carrito está vacío.<br>Agregá algo para empezar.</div>`}</div>
+      <div class="cart-summary"><div class="summary-row"><span>Subtotal</span><span>${money(cartSubtotal())}</span></div><div class="summary-row"><span>Envío de muestra</span><span>${items.length ? money(data.company.deliveryFee) : money(0)}</span></div><div class="summary-row total"><span>Total de muestra</span><span>${money(total)}</span></div><button class="btn btn-primary cart-checkout" data-action="checkout" ${items.length ? '' : 'disabled'}>Continuar al pedido <span aria-hidden="true">→</span></button><p class="cart-footnote">El total final se confirma antes de crear el pedido. Esta es una tienda demo.</p></div>
+    </aside>`;
   }
 
   function storeView() {
     const products = data.products.filter(p => p.active && (ui.category === 'Todo' || p.category === ui.category) && `${p.name} ${p.category}`.toLowerCase().includes(ui.storeSearch.toLowerCase().trim()));
     const categories = CATEGORIES.filter(category => category === 'Todo' || data.products.some(p => p.active && p.category === category));
-    return `<div class="store-page"><header class="store-topbar"><a class="store-brand" href="?vista=tienda" data-action="set-view" data-view="tienda"><span class="store-brand-mark">${esc((data.company.name || 'M').slice(0,1))}</span><span class="store-brand-name">${esc(data.company.name)}</span></a><div class="store-top-actions"><button class="btn btn-secondary" data-action="set-view" data-view="seguimiento">Seguir pedido</button><button class="btn btn-primary" data-action="set-view" data-view="admin">Panel demo ↗</button></div></header>
+    return `<div class="store-page"><header class="store-topbar"><a class="store-brand" href="?vista=tienda" data-action="set-view" data-view="tienda"><span class="store-brand-mark" aria-hidden="true">${esc((data.company.name || 'M').slice(0,1))}</span><span class="store-brand-name">${esc(data.company.name)}</span></a><div class="store-top-actions"><button class="btn btn-secondary" data-action="set-view" data-view="seguimiento">Seguir pedido</button><button class="btn btn-primary" data-action="set-view" data-view="admin">Panel demo <span aria-hidden="true">↗</span></button></div></header>
       <section class="store-hero"><div class="hero-content"><span class="hero-tag">✦ Comprá local, recibí en casa</span><h1>Lo que necesitás, sin salir de casa.</h1><p>Elegí tus productos y nosotros preparamos tu pedido.</p></div></section>
-      <div class="store-meta-row"><div class="store-meta-left"><span class="store-meta-icon">🛍️</span><span><span class="store-meta-name">${esc(data.company.name)}</span><span class="store-meta-detail">${esc(data.company.area)} · Abierto hoy · Reparto propio</span></span></div><div class="store-perks"><span>◷ 35–55 min</span><span>⌖ Entrega desde ${money(data.company.deliveryFee)}</span><span>✓ Pedido seguro</span></div></div>
-      <main class="store-body"><div class="store-products-head"><div><h2 class="store-section-title">Catálogo</h2><p class="store-section-note">Productos de muestra · precios ilustrativos</p></div><div class="search-field" style="min-width:min(235px,48vw)"><span>⌕</span><input id="store-search" type="search" placeholder="Buscar producto" value="${esc(ui.storeSearch)}" autocomplete="off"></div></div>
-        <div class="store-layout"><section><div class="category-row">${categories.map(category=>`<button class="category-chip ${ui.category===category?'active':''}" data-action="category" data-category="${esc(category)}">${esc(category)}</button>`).join('')}</div><div class="store-product-grid">${products.map(product=>`<article class="store-product"><div class="store-product-visual"><span class="product-tag">${esc(product.badge || product.category)}</span><span aria-hidden="true">${esc(product.icon)}</span></div><div class="store-product-info"><div class="store-product-name">${esc(product.name)}</div><div class="store-product-size">${esc(product.size)}</div><div class="store-product-bottom"><span class="store-product-price">${money(product.price)}</span><button class="add-button" data-action="add-cart" data-id="${esc(product.id)}" aria-label="Agregar ${esc(product.name)} al carrito">+</button></div></div></article>`).join('')}</div>${products.length ? '' : `<div class="panel empty-state"><strong>No encontramos productos</strong>Probá otra búsqueda o categoría.</div>`}</section>${cartPanel()}</div>
-      </main><footer class="store-topbar" style="height:auto;min-height:50px;justify-content:center;color:#85908a;font-size:9px">Tienda de demostración · Los productos y precios son ficticios</footer></div>`;
+      <div class="store-meta-row"><div class="store-meta-left"><span class="store-meta-icon" aria-hidden="true">🛍️</span><span><span class="store-meta-name">${esc(data.company.name)}</span><span class="store-meta-detail">${esc(data.company.area)} · Datos de demostración</span></span></div><div class="store-perks"><span>⌖ Tarifa de entrega: ${money(data.company.deliveryFee)}</span><span>Catálogo y precios de muestra</span></div></div>
+      <main class="store-body"><div class="store-products-head"><div><h2 class="store-section-title">Catálogo</h2><p class="store-section-note">Productos y precios ilustrativos.</p></div><div class="search-field store-search-field"><span aria-hidden="true">⌕</span><input id="store-search" type="search" aria-label="Buscar productos por nombre o categoría" placeholder="Buscar producto" value="${esc(ui.storeSearch)}" autocomplete="off"></div></div>
+        <div class="store-layout"><section class="catalog-column"><div class="category-row" role="group" aria-label="Filtrar productos por categoría">${categories.map(category=>`<button type="button" class="category-chip ${ui.category===category?'active':''}" aria-pressed="${ui.category===category}" data-action="category" data-category="${esc(category)}">${esc(category)}</button>`).join('')}</div><div class="store-product-grid">${products.map(product=>`<article class="store-product"><div class="store-product-visual"><span class="product-tag">${esc(product.badge || product.category)}</span><span aria-hidden="true">${esc(product.icon)}</span></div><div class="store-product-info"><h3 class="store-product-name">${esc(product.name)}</h3><div class="store-product-size">${esc(product.size)}</div><div class="store-product-bottom"><span class="store-product-price">${money(product.price)}</span><button type="button" class="add-button" data-action="add-cart" data-id="${esc(product.id)}" aria-label="Agregar ${esc(product.name)} al carrito">+</button></div></div></article>`).join('')}</div>${products.length ? '' : `<div class="panel empty-state"><strong>No encontramos productos</strong>Probá otra búsqueda o categoría.</div>`}</section><button class="cart-overlay ${ui.cartOpen ? 'show' : ''}" type="button" data-action="close-cart" aria-label="Cerrar carrito" ${ui.cartOpen ? '' : 'hidden'}></button>${cartPanel()}</div>
+        <button class="cart-dock" type="button" data-action="open-cart" aria-controls="cart-panel" aria-expanded="${ui.cartOpen}" aria-label="Abrir pedido: ${cartCount()} productos, total ${money(cartSubtotal() + (cartCount() ? data.company.deliveryFee : 0))}"><span class="cart-dock-icon" aria-hidden="true">🛒</span><span class="cart-dock-label">${cartCount() ? `${cartCount()} ${cartCount() === 1 ? 'producto' : 'productos'}` : 'Ver mi pedido'}</span><strong>${money(cartSubtotal() + (cartCount() ? data.company.deliveryFee : 0))}</strong><span class="cart-dock-action" aria-hidden="true">Ver carrito →</span></button>
+      </main><footer class="store-footer">Tienda de demostración · Los productos y precios son ficticios.</footer></div>`;
   }
 
   function routeOrders() { return data.orders.filter(order => ['Listo', 'En reparto'].includes(order.status)); }
@@ -314,21 +328,21 @@
     const orders = routeOrders();
     const active = orders.find(order => order.id === ui.routeOrderId);
     const locationText = ui.geoPoint ? `Ubicación local activa · ${ui.geoPoint.lat.toFixed(5)}, ${ui.geoPoint.lng.toFixed(5)} · precisión ${Math.round(ui.geoPoint.accuracy)} m` : ui.geoMessage;
-    return `<div class="courier-page"><header class="courier-top"><span class="brand-lockup" style="padding:0"><span class="brand-mark">W</span><span><span class="brand-name">White Software</span><span class="brand-caption">Vista de reparto</span></span></span><button class="btn btn-secondary btn-small" data-action="set-view" data-view="admin">Salir de reparto</button></header><main class="courier-shell"><div class="courier-heading"><div><p class="eyebrow">Buen día, María</p><h1>Mis entregas</h1><p>Tu ubicación solo se solicita cuando iniciás una entrega.</p></div>${pill(ui.geoPoint ? 'GPS activo en este dispositivo' : 'Sin rastreo')}</div>
-      <div class="courier-map"><span class="map-overlay-label">Ruta de muestra · Managua</span><span class="map-road-label road-one">Bello Horizonte</span><span class="map-road-label road-two">Altamira</span><span class="route-line"></span><span class="map-pin pin-start"><span>⌖</span></span><span class="map-pin pin-end"><span>⌖</span></span><span class="map-location-note" id="map-location-note">${esc(locationText)}</span></div>
-      <div class="gps-indicator ${ui.geoPoint ? 'live' : ''}" id="gps-state"><span class="gps-dot"></span><span>${esc(locationText)}. La demo no envía coordenadas a un servidor.</span></div>
+    return `<div class="courier-page"><header class="courier-top"><span class="brand-lockup" style="padding:0"><span class="brand-mark" aria-hidden="true">W</span><span><span class="brand-name">White Software</span><span class="brand-caption">Vista de reparto</span></span></span><button class="btn btn-secondary btn-small" data-action="set-view" data-view="admin">Salir de reparto</button></header><main class="courier-shell"><div class="courier-heading"><div><p class="eyebrow">Cuenta de repartidor demo</p><h1>Mis entregas</h1><p>Tu ubicación solo se solicita cuando iniciás una entrega.</p></div>${pill(ui.geoPoint ? 'GPS activo en este dispositivo' : 'Sin rastreo')}</div>
+      <div class="courier-map" role="img" aria-label="Mapa ilustrativo de Managua. La ruta es de muestra y no ofrece navegación GPS."><span class="map-overlay-label">Mapa de referencia · sin navegación</span><span class="map-road-label road-one">Bello Horizonte</span><span class="map-road-label road-two">Altamira</span><span class="route-line"></span><span class="map-pin pin-start"><span>⌖</span></span><span class="map-pin pin-end"><span>⌖</span></span><span class="map-location-note" id="map-location-note">${esc(locationText)}</span></div>
+      <div class="gps-indicator ${ui.geoPoint ? 'live' : ''}" id="gps-state" role="status" aria-live="polite" aria-atomic="true"><span class="gps-dot"></span><span>${esc(locationText)}. La demo no envía coordenadas a un servidor.</span></div>
       <div class="delivery-list">${orders.length ? orders.map(order=>`<article class="delivery-card ${active?.id===order.id?'active':''}"><div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h3>${esc(order.id)} · ${esc(order.customer)}</h3>${pill(order.status)}</div><p>${esc(order.address || 'Dirección de entrega')} · ${esc(order.area || 'Managua')}</p><div class="delivery-meta"><span>▣ ${order.items.reduce((n,i)=>n+i.qty,0)} productos</span><span>◷ ${esc(order.time || 'Ahora')}</span><span>💵 ${money(order.total)}</span></div></div><button class="btn ${active?.id===order.id?'btn-quiet':'btn-primary'}" data-action="${active?.id===order.id?'finish-delivery':'start-delivery'}" data-id="${esc(order.id)}">${active?.id===order.id?'Completar entrega ✓':'Iniciar entrega →'}</button></article>`).join('') : `<div class="panel empty-state"><strong>No hay entregas pendientes</strong>Los pedidos listos aparecerán acá.</div>`}</div>
       <p class="field-help" style="margin-top:13px">Prototipo: la ubicación se conserva solo en memoria en este teléfono, no se comparte con el cliente. La versión real requiere app/API y reglas de privacidad.</p></main></div>`;
   }
 
   function trackingView() {
     const query = ui.trackingSearch.trim().toLowerCase();
-    const order = query ? data.orders.find(o => o.id.toLowerCase() === query) : data.orders[0];
+    const order = query ? data.orders.find(o => o.id.toLowerCase() === query) : null;
     const stageIndex = order ? Math.max(0, ORDER_STAGES.indexOf(order.status)) : -1;
     const stages = ['Pedido recibido', 'Confirmado por el negocio', 'En preparación', 'Listo para reparto', 'En camino', 'Entregado'];
     const location = ui.geoPoint && ui.routeOrderId === order?.id ? `Última ubicación en este dispositivo: ${ui.geoPoint.lat.toFixed(5)}, ${ui.geoPoint.lng.toFixed(5)}.` : 'El seguimiento compartido se habilitará al conectar la app de reparto y el servidor.';
-    return `<div class="store-page"><header class="store-topbar"><a class="store-brand" href="?vista=tienda" data-action="set-view" data-view="tienda"><span class="store-brand-mark">${esc((data.company.name || 'M').slice(0,1))}</span><span class="store-brand-name">${esc(data.company.name)}</span></a><button class="btn btn-secondary" data-action="set-view" data-view="tienda">Volver a la tienda</button></header><main class="tracking-shell"><p class="eyebrow">Seguimiento del pedido</p><h1 class="store-section-title" style="font-size:25px">¿Dónde va mi pedido?</h1><p class="store-section-note" style="margin-top:6px">Ingresá el código que recibiste al confirmar la compra.</p><form class="tracking-search" id="track-form" style="margin-top:16px"><input id="tracking-code" name="code" placeholder="Ejemplo: WN-1048" value="${esc(ui.trackingSearch)}" autocomplete="off" aria-label="Código de pedido"><button class="btn btn-primary" type="submit">Buscar pedido</button></form>
-      ${order ? `<section class="tracking-card"><div class="tracking-banner"><small>Pedido ${esc(order.id)}</small><h2>${esc(order.status === 'Entregado' ? '¡Tu pedido llegó!' : order.status === 'En reparto' ? 'Tu pedido va en camino' : 'Estamos preparando tu pedido')}</h2><p>${esc(order.customer)} · ${esc(order.area || 'Managua')}</p></div><div class="tracking-content"><div class="timeline">${stages.map((stage,i)=>`<div class="timeline-step ${i<=stageIndex?'done':''}">${stage}${i===stageIndex?` · ${esc(order.time || 'Actualizado ahora')}`:''}</div>`).join('')}</div><div><div class="tracking-details"><strong>Resumen del pedido</strong><p>${order.items.map(item=>`${item.qty} × ${esc(item.name)}`).join('<br>')}<br><br>Total ${money(order.total)} · ${esc(order.paymentMethod || 'Pago pendiente')}</p><span class="tracking-code">${esc(order.id)}</span></div><div class="gps-indicator ${ui.geoPoint && ui.routeOrderId===order.id?'live':''}" style="margin-top:10px"><span class="gps-dot"></span><span>${esc(location)}</span></div></div></div></section>` : `<div class="panel empty-state" style="margin-top:15px"><strong>No encontramos ese pedido</strong>Revisá el código y volvé a intentarlo.</div>`}
+    return `<div class="store-page"><header class="store-topbar"><a class="store-brand" href="?vista=tienda" data-action="set-view" data-view="tienda"><span class="store-brand-mark" aria-hidden="true">${esc((data.company.name || 'M').slice(0,1))}</span><span class="store-brand-name">${esc(data.company.name)}</span></a><button class="btn btn-secondary" data-action="set-view" data-view="tienda">Volver a la tienda</button></header><main class="tracking-shell"><p class="eyebrow">Seguimiento del pedido</p><h1 class="store-section-title" style="font-size:25px">¿Dónde va mi pedido?</h1><p class="store-section-note" style="margin-top:6px">Ingresá el código que recibiste al confirmar la compra.</p><form class="tracking-search" id="track-form" style="margin-top:16px"><input id="tracking-code" name="code" placeholder="Ejemplo: WN-1048" value="${esc(ui.trackingSearch)}" autocomplete="off" aria-label="Código de pedido"><button class="btn btn-primary" type="submit">Buscar pedido</button></form>
+      ${order ? `<section class="tracking-card"><div class="tracking-banner"><small>Pedido ${esc(order.id)}</small><h2>${esc(order.status === 'Entregado' ? '¡Tu pedido llegó!' : order.status === 'En reparto' ? 'Tu pedido va en camino' : 'Estamos preparando tu pedido')}</h2><p>${esc(order.customer)} · ${esc(order.area || 'Managua')}</p></div><div class="tracking-content"><div class="timeline" role="group" aria-label="Avance del pedido">${stages.map((stage,i)=>`<div class="timeline-step ${i<=stageIndex?'done':''}">${stage}${i===stageIndex?` · ${esc(order.time || 'Actualizado ahora')}`:''}</div>`).join('')}</div><div><div class="tracking-details"><strong>Resumen del pedido</strong><p>${order.items.map(item=>`${item.qty} × ${esc(item.name)}`).join('<br>')}<br><br>Total ${money(order.total)} · ${esc(order.paymentMethod || 'Pago pendiente')}</p><span class="tracking-code">${esc(order.id)}</span></div><div class="gps-indicator ${ui.geoPoint && ui.routeOrderId===order.id?'live':''}" style="margin-top:10px"><span class="gps-dot"></span><span>${esc(location)}</span></div></div></div></section>` : query ? `<div class="panel empty-state tracking-empty"><strong>No encontramos ese pedido</strong>Revisá el código y volvé a intentarlo.</div>` : `<div class="panel empty-state tracking-empty"><strong>Ingresá un código de pedido</strong>Usá el código que recibiste al confirmar tu compra.</div>`}
       <div class="warning-note" style="margin-top:14px">Vista demostrativa. La ubicación del repartidor todavía no se comparte entre teléfonos porque falta el backend.</div></main></div>`;
   }
 
@@ -363,26 +377,68 @@
     applyBrand();
     const body = ui.view === 'tienda' ? storeView() : ui.view === 'reparto' ? courierView() : ui.view === 'seguimiento' ? trackingView() : adminView();
     app.innerHTML = `${body}${modalView()}`;
+    document.body.classList.toggle('cart-open', ui.view === 'tienda' && ui.cartOpen);
     document.title = `${ui.view === 'admin' ? pageTitle() : ({tienda:'Tienda', reparto:'Reparto', seguimiento:'Seguimiento'})[ui.view]} · ${esc(data.company.name)} | White Software`;
   }
 
+  function focusPageStart() {
+    const target = $('main h1, main h2, .topbar h1');
+    if (!target) return;
+    target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+  }
+
   function openModal(type, id) {
+    modalReturnFocus = document.activeElement;
     ui.modal = { type, id };
+    ui.cartOpen = false;
     render();
-    const first = $('.modal input, .modal textarea, .modal select');
+    const first = $('.modal input:not([disabled]), .modal textarea:not([disabled]), .modal select:not([disabled]), .modal button:not([disabled])');
     if (first) window.setTimeout(() => first.focus(), 30);
   }
 
-  function closeModal() { ui.modal = null; render(); }
+  function closeModal() {
+    ui.modal = null;
+    render();
+    const previous = modalReturnFocus;
+    modalReturnFocus = null;
+    if (previous?.isConnected) previous.focus();
+    else if (ui.view === 'tienda') $('.cart-dock')?.focus();
+    else focusPageStart();
+  }
+
+  function openCart() {
+    cartReturnFocus = document.activeElement;
+    ui.cartOpen = true;
+    render();
+    $('.cart-close')?.focus();
+  }
+
+  function closeCart() {
+    ui.cartOpen = false;
+    render();
+    const previous = cartReturnFocus;
+    cartReturnFocus = null;
+    if (previous?.isConnected) previous.focus();
+    else $('.cart-dock')?.focus();
+  }
 
   function closeSidebar() {
-    $('#sidebar')?.classList.remove('open');
+    const sidebarElement = $('#sidebar');
+    const restoreMenuFocus = sidebarElement?.contains(document.activeElement);
+    sidebarElement?.classList.remove('open');
     $('#overlay')?.classList.remove('show');
+    $('.mobile-menu')?.setAttribute('aria-expanded', 'false');
+    if (restoreMenuFocus) $('.mobile-menu')?.focus();
   }
 
   function toggleSidebar() {
-    $('#sidebar')?.classList.toggle('open');
-    $('#overlay')?.classList.toggle('show');
+    const opening = !$('#sidebar')?.classList.contains('open');
+    $('#sidebar')?.classList.toggle('open', opening);
+    $('#overlay')?.classList.toggle('show', opening);
+    $('.mobile-menu')?.setAttribute('aria-expanded', String(opening));
+    if (opening) $('.nav-item.active')?.focus();
+    else $('.mobile-menu')?.focus();
   }
 
   function nextOrderStatus(order) {
@@ -413,7 +469,12 @@
     if (!product) return;
     const next = Math.max(0, (ui.cart[id] || 0) + delta);
     if (next) ui.cart[id] = next; else delete ui.cart[id];
+    const restoreCartControl = ui.cartOpen;
     render();
+    if (restoreCartControl) {
+      const control = $$('.cart-panel [data-action="cart-qty"]').find(button => button.dataset.id === id && Number(button.dataset.delta) === delta);
+      (control || $('.cart-panel.is-open'))?.focus();
+    }
     if (delta > 0) toast(`${product.name} agregado al carrito.`);
   }
 
@@ -449,7 +510,7 @@
     history.replaceState({}, '', url);
     ui.view = 'seguimiento';
     render();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     toast(`Pedido ${order.id} creado en la demo.`);
   }
 
@@ -568,16 +629,28 @@
     else if (action === 'section') setSection(button.dataset.section);
     else if (action === 'toggle-sidebar') toggleSidebar();
     else if (action === 'close-sidebar') closeSidebar();
-    else if (action === 'category') { ui.category = button.dataset.category; render(); }
+    else if (action === 'category') {
+      ui.category = button.dataset.category;
+      render();
+      $$('[data-action="category"]').find(item => item.dataset.category === ui.category)?.focus();
+    }
     else if (action === 'add-cart') addToCart(button.dataset.id, 1);
     else if (action === 'cart-qty') addToCart(button.dataset.id, Number(button.dataset.delta || 0));
+    else if (action === 'open-cart') openCart();
+    else if (action === 'close-cart') closeCart();
     else if (action === 'checkout') { if (cartCount()) openModal('checkout'); }
     else if (action === 'close-modal') closeModal();
     else if (action === 'backdrop-close' && event.target === button) closeModal();
     else if (action === 'add-product') openModal('product');
     else if (action === 'toggle-product') {
       const product = data.products.find(item => item.id === button.dataset.id);
-      if (product) { product.active = !product.active; persist(); render(); toast(`${product.name}: ${product.active ? 'disponible' : 'pausado'}.`); }
+      if (product) {
+        product.active = !product.active;
+        persist();
+        render();
+        $$('[data-action="toggle-product"]').find(item => item.dataset.id === product.id)?.focus();
+        toast(`${product.name}: ${product.active ? 'disponible' : 'pausado'}.`);
+      }
     } else if (action === 'provider-checklist') openModal('provider');
     else if (action === 'advance-order') {
       if (ui.modal?.type === 'order' || ui.section === 'pedidos' || ui.section === 'repartidores') advanceOrder(button.dataset.id);
@@ -612,7 +685,26 @@
   document.addEventListener('click', handleClick);
   document.addEventListener('submit', handleSubmit);
   document.addEventListener('input', handleInput);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape' && ui.modal) closeModal(); });
+  document.addEventListener('keydown', event => {
+    const dialog = ui.modal ? $('.modal') : ui.view === 'tienda' && ui.cartOpen ? $('.cart-panel.is-open') : null;
+    if (event.key === 'Escape') {
+      if (ui.modal) closeModal();
+      else if (ui.cartOpen) closeCart();
+      else if ($('#sidebar')?.classList.contains('open')) closeSidebar();
+      return;
+    }
+    if (event.key !== 'Tab' || !dialog) return;
+    const focusable = [...dialog.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter(element => element.getClientRects().length > 0);
+    if (!focusable.length) { event.preventDefault(); dialog.focus(); return; }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+      event.preventDefault(); first.focus();
+    }
+  });
 
   window.addEventListener('beforeunload', stopLocationWatch);
   render();
