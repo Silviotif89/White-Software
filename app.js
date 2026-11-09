@@ -96,7 +96,7 @@
 
   function setView(view) {
     if (!['admin', 'tienda', 'reparto', 'seguimiento'].includes(view)) return;
-    if (view !== 'reparto') stopLocationWatch();
+    if (view !== 'reparto') { stopLocationWatch(); ui.routeOrderId = null; }
     ui.view = view;
     ui.modal = null;
     const url = new URL(location.href);
@@ -165,7 +165,7 @@
       </nav>
       <div class="sidebar-bottom">
         <div class="sidebar-help"><strong>Tu comercio, tu operación</strong>Compartí tu tienda por enlace y gestioná las entregas con tu propio equipo.</div>
-        <div class="profile-row"><span class="avatar">SV</span><span><span class="profile-name">Silvio Vega</span><span class="profile-role">Administrador demo</span></span></div>
+        <div class="profile-row"><span class="avatar">AD</span><span><span class="profile-name">Administrador demo</span><span class="profile-role">Cuenta de muestra</span></span></div>
       </div>
     </aside>`;
   }
@@ -310,7 +310,7 @@
 
   function courierView() {
     const orders = routeOrders();
-    const active = orders.find(order => order.id === ui.routeOrderId) || orders.find(order => order.status === 'En reparto');
+    const active = orders.find(order => order.id === ui.routeOrderId);
     const locationText = ui.geoPoint ? `Ubicación local activa · ${ui.geoPoint.lat.toFixed(5)}, ${ui.geoPoint.lng.toFixed(5)} · precisión ${Math.round(ui.geoPoint.accuracy)} m` : ui.geoMessage;
     return `<div class="courier-page"><header class="courier-top"><span class="brand-lockup" style="padding:0"><span class="brand-mark">W</span><span><span class="brand-name">White Software</span><span class="brand-caption">Vista de reparto</span></span></span><button class="btn btn-secondary btn-small" data-action="set-view" data-view="admin">Salir de reparto</button></header><main class="courier-shell"><div class="courier-heading"><div><p class="eyebrow">Buen día, María</p><h1>Mis entregas</h1><p>Tu ubicación solo se solicita cuando iniciás una entrega.</p></div>${pill(ui.geoPoint ? 'GPS activo en este dispositivo' : 'Sin rastreo')}</div>
       <div class="courier-map"><span class="map-overlay-label">Ruta de muestra · Managua</span><span class="map-road-label road-one">Bello Horizonte</span><span class="map-road-label road-two">Altamira</span><span class="route-line"></span><span class="map-pin pin-start"><span>⌖</span></span><span class="map-pin pin-end"><span>⌖</span></span><span class="map-location-note" id="map-location-note">${esc(locationText)}</span></div>
