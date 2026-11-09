@@ -1,0 +1,16 @@
+{
+  "id": "/?vista=reparto",
+  "name": "White Software Reparto",
+  "short_name": "White Rider",
+  "description": "Interfaz de reparto de White Software",
+  "lang": "es-NI",
+  "start_url": "/?vista=reparto",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f9fc",
+  "theme_color": "#155eef",
+  "icons": [
+    {"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}
+  ]
+}
+
