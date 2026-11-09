@@ -52,4 +52,3 @@ El servidor local escucha en 127.0.0.1. Para cualquier bind externo, server.py o
 6. Configurar HTTPS, gestión de secretos, recuperación de acceso, limitación de intentos, respaldos, restauración y monitoreo.
 7. Hacer revisión de seguridad y privacidad, y simular fallos de red, reintentos, cobro incierto y reasignación.
 8. Ejecutar una prueba piloto con pedidos de bajo riesgo y procedimiento de soporte antes de abrir al público.
-

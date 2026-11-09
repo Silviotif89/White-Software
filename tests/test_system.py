@@ -84,9 +84,39 @@ class WhiteSoftwareFlowTest(unittest.TestCase):
         self.assertEqual(status, expected, payload)
         return payload
 
+    def first_sse_event(self, client, path):
+        req = urllib.request.Request(self.base + path, headers={"Accept": "text/event-stream"})
+        stream = client.open(req, timeout=5)
+        try:
+            event = None
+            while True:
+                line = stream.readline().decode("utf-8").strip()
+                if line.startswith("data: "):
+                    event = json.loads(line[6:])
+                if line == "" and event is not None:
+                    return event
+        finally:
+            stream.close()
+
+    def first_sse_event_type(self, client, path, event_type):
+        req = urllib.request.Request(self.base + path, headers={"Accept": "text/event-stream"})
+        stream = client.open(req, timeout=8)
+        try:
+            while True:
+                line = stream.readline().decode("utf-8").strip()
+                if line.startswith("data: "):
+                    event = json.loads(line[6:])
+                    if event.get("type") == event_type:
+                        return event
+        finally:
+            stream.close()
+
     def test_end_to_end_order_roles_payments_gps_and_tenant_boundary(self):
         self.assertTrue(self.request(self.admin, "/api/health")["ok"])
         self.assertGreater(len(self.request(self.admin, "/api/storefront?slug=mercadito-la-esquina")["products"]), 0)
+        for route, view in (("/admin.html", "admin"), ("/tienda.html", "tienda"), ("/seguimiento.html", "seguimiento")):
+            page = urllib.request.urlopen(self.base + route, timeout=3).read().decode("utf-8")
+            self.assertIn('data-view="%s"' % view, page)
         self.request(self.admin, "/api/admin/orders", expected=401)
 
         self.request(self.admin, "/api/orders", {
@@ -113,13 +143,19 @@ class WhiteSoftwareFlowTest(unittest.TestCase):
         self.assertEqual(public_tracking["order"]["status"], "received")
         self.assertNotIn("phone", public_tracking["order"])
         self.assertNotIn("tenant_id", public_tracking["order"])
+        public_event = self.first_sse_event(self.admin, "/api/events?token=" + created["tracking_token"] + "&after=0")
+        self.assertEqual(public_event["entity_id"], created["order_id"])
 
         self.request(self.admin, "/api/login", {"email": "admin@demo.white", "password": "Demo123!"})
+        admin_event = self.first_sse_event(self.admin, "/api/events?after=0")
+        self.assertIn("type", admin_event)
         self.request(self.admin, "/api/admin/orders/" + created["order_id"] + "/status", {"status": "confirmed"})
         self.request(self.admin, "/api/admin/orders/" + created["order_id"] + "/status", {"status": "preparing"})
         self.request(self.admin, "/api/admin/orders/" + created["order_id"] + "/assign", {"courier_id": 3})
         self.request(self.rider, "/api/login", {"email": "rider@demo.white", "password": "Demo123!"})
         self.request(self.rider, "/api/admin/orders", expected=403)
+        assigned_event = self.first_sse_event_type(self.rider, "/api/events?after=0", "courier_assigned")
+        self.assertEqual(assigned_event["entity_id"], created["order_id"])
         tasks = self.request(self.rider, "/api/rider/tasks")["tasks"]
         self.assertEqual(tasks[0]["id"], created["order_id"])
         self.request(self.rider, "/api/rider/tasks/" + created["order_id"] + "/event",
@@ -181,4 +217,3 @@ class WhiteSoftwareFlowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

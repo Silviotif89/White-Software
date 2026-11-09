@@ -3,7 +3,7 @@
   var app = document.getElementById("app");
   var toastRegion = document.getElementById("toast-region");
   var params = new URLSearchParams(location.search);
-  var view = params.get("vista") || "admin";
+  var view = params.get("vista") || document.body.dataset.view || "admin";
   var slug = params.get("comercio") || "mercadito-la-esquina";
   var section = "overview";
   var cart = {};
@@ -14,6 +14,8 @@
   var locationLastSent = 0;
   var pendingKey = "";
   var refreshTimer = null;
+  var eventStream = null;
+  var eventRefreshTimer = null;
   var queueKey = "white-rider-events-v1";
   var labels = {received:"Recibido",confirmed:"Confirmado",preparing:"Preparando",ready:"Listo para recoger",in_delivery:"En reparto",delivered:"Entregado",cancelled:"Cancelado",assigned:"Asignada",accepted:"Aceptada",picked_up:"Recogida",on_route:"En ruta",incident:"Con incidencia",pending_cash:"Efectivo pendiente",pending_verification:"Transferencia por verificar",paid_manual:"Transferencia verificada",paid_cash:"Efectivo recibido",pending_integration:"Integración pendiente"};
 
@@ -58,8 +60,8 @@
   }
   function shell(content, mode) {
     return '<div class="app-shell mode-' + esc(mode || "") + '">' +
-      '<header class="topbar"><a class="brand" href="?vista=admin"><span class="brand-mark">W</span><span><b>WHITE</b><small>SOFTWARE</small></span></a>' +
-      '<nav class="global-nav" aria-label="Interfaces"><a class="' + (view==="admin"?"current":"") + '" href="?vista=admin">Comercio</a><a class="' + (view==="tienda"?"current":"") + '" href="?vista=tienda&amp;comercio=' + encodeURIComponent(slug) + '">Tienda</a><a class="' + (view==="reparto"?"current":"") + '" href="?vista=reparto">Reparto</a></nav>' +
+      '<header class="topbar"><a class="brand" href="/admin.html"><span class="brand-mark">W</span><span><b>WHITE</b><small>SOFTWARE</small></span></a>' +
+      '<nav class="global-nav" aria-label="Interfaces"><a class="' + (view==="admin"?"current":"") + '" href="/admin.html">Panel admin</a><a class="' + (view==="tienda"?"current":"") + '" href="/tienda.html?comercio=' + encodeURIComponent(slug) + '">Tienda cliente</a></nav>' +
       '<span class="environment"><i></i> DEMO LOCAL</span></header>' + content +
       '<footer class="global-foot"><span>White Software · Nicaragua</span><span>Datos de demostración · Tarjeta pendiente de integración</span></footer></div>';
   }
@@ -73,6 +75,27 @@
     }, (seconds || 12) * 1000);
   }
   function endPoll() { clearInterval(refreshTimer); refreshTimer = null; }
+  function stopEventStream() {
+    if(eventStream){eventStream.close();eventStream=null;}
+    clearTimeout(eventRefreshTimer);eventRefreshTimer=null;
+  }
+  function connectEventStream(mode,refresh,token) {
+    stopEventStream();
+    if(!window.EventSource)return;
+    var cursorKey="white-events-"+mode+(token||"");
+    var cursor=sessionStorage.getItem(cursorKey)||"0";
+    var url="/api/events?after="+encodeURIComponent(cursor);
+    if(token)url+="&token="+encodeURIComponent(token);
+    eventStream=new EventSource(url);
+    eventStream.addEventListener("update",function(event){
+      if(event.lastEventId)sessionStorage.setItem(cursorKey,event.lastEventId);
+      clearTimeout(eventRefreshTimer);
+      eventRefreshTimer=setTimeout(function(){
+        if(document.hidden||/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement&&document.activeElement.tagName||""))return;
+        refresh();
+      },180);
+    });
+  }
   function navItem(key, text, symbol) {
     return '<button class="side-link ' + (section===key?"active":"") + '" data-section="' + key + '"><span class="nav-symbol">' + symbol + '</span>' + text + '</button>';
   }
@@ -92,12 +115,13 @@
     app.innerHTML = loginScreen(kind);
   }
   async function startAdmin() {
-    endPoll();
+    endPoll();stopEventStream();
     var user;
     try { user = await getSession(); } catch (_) { user = null; }
     if (!user) return renderLogin("admin");
-    if (user.role === "courier") { location.href = "?vista=reparto"; return; }
+    if (user.role === "courier") { location.href = "/?vista=reparto"; return; }
     await renderAdmin();
+    connectEventStream("admin",renderAdmin);
     beginPoll(renderAdmin, 15);
   }
   async function renderAdmin() {
@@ -131,23 +155,23 @@
     if (section==="catalog") main=renderProducts(products);
     if (section==="tracking") main=renderLocations(locations);
     if (section==="settings") main=renderSettings(settings,activity);
-    var storeUrl=location.origin+location.pathname+"?vista=tienda&comercio=mercadito-la-esquina";
-    content='<div class="admin-layout">' + nav + '<main class="workspace"><div class="workspace-top"><div class="crumb">COMERCIO <span>/</span> ' + esc(section.toUpperCase()) + '</div><div class="workspace-actions"><a class="btn btn-quiet btn-small" target="_blank" rel="noopener" href="?vista=tienda&amp;comercio=mercadito-la-esquina">Abrir tienda ↗</a><span class="sync-label"><i></i> Sincronización activa</span></div></div><div class="workspace-content">' + main + '</div></main></div>';
+    var storeUrl=location.origin+"/tienda.html?comercio=mercadito-la-esquina";
+    content='<div class="admin-layout">' + nav + '<main class="workspace"><div class="workspace-top"><div class="crumb">COMERCIO <span>/</span> ' + esc(section.toUpperCase()) + '</div><div class="workspace-actions"><a class="btn btn-quiet btn-small" target="_blank" rel="noopener" href="/tienda.html?comercio=mercadito-la-esquina">Abrir tienda ↗</a><span class="sync-label"><i></i> Conectado en vivo</span></div></div><div class="workspace-content">' + main + '</div></main></div>';
     app.innerHTML=shell(content,"admin");
   }
   function renderOverview(data) {
     var c=data.counts||{};
     return header("CENTRO DE OPERACIONES","Tu comercio, en un solo lugar","Resumen calculado desde los pedidos guardados en esta base de datos.",
-      '<a class="btn btn-primary" href="?vista=tienda&amp;comercio=mercadito-la-esquina" target="_blank" rel="noopener">Ver tienda <span>↗</span></a>')+
+      '<a class="btn btn-primary" href="/tienda.html?comercio=mercadito-la-esquina" target="_blank" rel="noopener">Ver tienda <span>↗</span></a>')+
       '<div class="metric-grid"><article class="metric"><span>Pedidos de hoy</span><strong>'+(data.orders_today||0)+'</strong><small>Según hora UTC del servidor</small></article><article class="metric"><span>Por confirmar</span><strong>'+(c.received||0)+'</strong><small>Pedidos recién recibidos</small></article><article class="metric"><span>En reparto</span><strong>'+(c.in_delivery||0)+'</strong><small>Estado actualizado por el rider</small></article><article class="metric"><span>Ventas entregadas</span><strong>'+money(data.sales_delivered)+'</strong><small>Solo pedidos marcados entregados</small></article></div>'+
       '<div class="overview-grid"><section class="panel panel-dark"><div class="panel-kicker">OPERACIÓN CONECTADA</div><h2>Del enlace a la entrega</h2><p>El cliente arma el carrito en la tienda. El pedido llega a esta bandeja y el repartidor actualiza el avance desde su teléfono.</p><div class="mini-flow"><span>Cliente</span><b>→</b><span>Panel</span><b>→</b><span>Rider</span></div><button class="btn btn-white" data-section="orders">Abrir bandeja de pedidos</button></section><section class="panel"><div class="panel-title-row"><div><span class="eyebrow">COBROS</span><h3>Estado de pagos</h3></div><span class="badge badge-pending">'+(data.payments_pending||0)+' pendientes</span></div><div class="payment-line"><span><i class="method-dot cash"></i>Efectivo al recibir</span><b>Disponible</b></div><div class="payment-line"><span><i class="method-dot transfer"></i>Transferencia</span><b>Verificación manual</b></div><div class="payment-line"><span><i class="method-dot card"></i>Tarjeta</span><b>Pendiente de integración</b></div><p class="fine-print">No se simulan aprobaciones. El proveedor de pago y sus credenciales aún no están conectados.</p></section></div>'+
-      '<div class="panel onboarding"><div><span class="eyebrow">SIGUIENTE PASO OPERATIVO</span><h3>Probá el flujo con un pedido demo</h3><p>Creá el pedido desde la tienda, confirmalo aquí, preparalo, asigná el repartidor y avanzá hasta la entrega.</p></div><a class="btn btn-primary" href="?vista=tienda&amp;comercio=mercadito-la-esquina" target="_blank" rel="noopener">Crear pedido de prueba</a></div>';
+      '<div class="panel onboarding"><div><span class="eyebrow">SIGUIENTE PASO OPERATIVO</span><h3>Probá el flujo con un pedido demo</h3><p>Creá el pedido desde la tienda, confirmalo aquí, preparalo, asigná el rider Android y seguí su ubicación activa.</p></div><a class="btn btn-primary" href="/tienda.html?comercio=mercadito-la-esquina" target="_blank" rel="noopener">Crear pedido de prueba</a></div>';
   }
   function renderOrders(orders,couriers) {
     var rows=orders||[];
     var html=header("GESTIÓN COMERCIAL","Pedidos","La misma bandeja recibe pedidos de la tienda y sus cambios de estado.",'<button class="btn btn-quiet" data-action="refresh">Actualizar</button>')+
       '<div class="filter-row"><span class="badge badge-neutral">'+rows.length+' pedidos recientes</span><span class="fine-print">Los importes se calculan en el servidor con el catálogo vigente.</span></div>';
-    if(!rows.length)return html+'<div class="empty-state"><span class="empty-icon">▤</span><h3>La bandeja está lista</h3><p>Cuando un cliente complete un pedido desde el enlace de la tienda, aparecerá aquí.</p><a class="btn btn-primary" href="?vista=tienda&amp;comercio=mercadito-la-esquina" target="_blank" rel="noopener">Abrir tienda de prueba</a></div>';
+    if(!rows.length)return html+'<div class="empty-state"><span class="empty-icon">▤</span><h3>La bandeja está lista</h3><p>Cuando un cliente complete un pedido desde la tienda, aparecerá aquí y el panel recibirá la actualización en vivo.</p><a class="btn btn-primary" href="/tienda.html?comercio=mercadito-la-esquina" target="_blank" rel="noopener">Abrir tienda de prueba</a></div>';
     html+='<div class="order-list">';
     rows.forEach(function(o){
       var actions="";
@@ -181,7 +205,7 @@
   function renderLocations(locations) {
     var rows=locations||[];
     var html=header("ÚLTIMA MILLA","Reparto y ubicación","Las coordenadas solo aparecen durante una ruta activa, con permiso del rider y con datos recientes.",
-      '<a class="btn btn-quiet" href="?vista=reparto" target="_blank" rel="noopener">Abrir interfaz rider ↗</a>')+
+      '<span class="badge badge-live">Monitoreo de entregas</span>')+
       '<div class="privacy-banner"><span class="privacy-icon">⌖</span><div><b>Control de ubicación activo por entrega</b><p>El repartidor inicia el permiso desde su teléfono; el sistema deja de aceptar nuevas coordenadas al pausar o completar la ruta. Los puntos vencen a las 6 horas.</p></div></div>';
     if(!rows.length)return html+'<div class="empty-state"><span class="empty-icon">⌖</span><h3>No hay ubicación compartida ahora</h3><p>Las coordenadas aparecen cuando el rider inicia una ruta y activa explícitamente compartir ubicación.</p></div>';
     html+='<div class="location-grid">';
@@ -193,20 +217,20 @@
   }
   function renderSettings(s,activity) {
     return header("CONFIGURACIÓN","Tu comercio","Personalizá la identidad y la tarifa que ve el cliente en el enlace.")+
-      '<div class="settings-layout"><section class="panel"><span class="eyebrow">MARCA Y ENTREGA</span><h3>Preferencias de la tienda</h3><form id="settings-form" class="form-stack compact"><label>Nombre del comercio<input name="name" value="'+esc(s.name)+'" required maxlength="100"></label><label>Frase breve<input name="tagline" value="'+esc(s.tagline)+'" maxlength="160"></label><label>Color de marca<div class="color-control"><input name="color" type="color" value="'+esc(s.color)+'"><span>'+esc(s.color)+'</span></div></label><label>Tarifa de entrega en córdobas<input name="delivery_fee" type="number" min="0" step="0.01" value="'+(Number(s.delivery_fee)/100).toFixed(2)+'" required></label><label>Instrucciones de transferencia<textarea name="transfer_instructions" rows="3" maxlength="500">'+esc(s.transfer_instructions)+'</textarea></label><button class="btn btn-primary" type="submit">Guardar configuración</button></form></section><div class="settings-stack"><section class="panel"><span class="eyebrow">ENLACE PARA COMPARTIR</span><h3>Tu tienda ya tiene un enlace</h3><p class="muted">Podés enviarlo por WhatsApp, Messenger, Facebook o copiarlo en tus perfiles. El cliente compra desde el navegador.</p><div class="share-url"><code id="store-url">'+esc(location.origin+location.pathname+'?vista=tienda&comercio='+s.slug)+'</code><button class="btn btn-outline btn-small" data-action="copy-store">Copiar enlace</button></div><div class="settings-payment"><b>Métodos de pago</b><div class="payment-line"><span>Efectivo al recibir</span><b class="text-success">Habilitado</b></div><div class="payment-line"><span>Transferencia</span><b>Confirmación manual</b></div><div class="payment-line"><span>Tarjetas</span><b>Pendiente del proveedor</b></div></div><p class="fine-print">Para pagos con tarjeta hace falta integrar y validar una pasarela/adquirente con contrato y credenciales del comercio. No se almacenan datos de tarjeta.</p></section><section class="panel"><span class="eyebrow">AUDITORÍA</span><h3>Actividad reciente</h3><ul class="audit-list">'+((activity||[]).map(function(x){return '<li><b>'+esc((x.action||"").replace(/_/g," "))+'</b><span>'+esc(x.entity_type)+" "+esc(x.entity_id)+" · "+esc(x.details)+" · "+date(x.created_at)+'</span></li>';}).join("")||'<li><span>Aún no hay cambios registrados.</span></li>')+'</ul></section></div></div>';
+      '<div class="settings-layout"><section class="panel"><span class="eyebrow">MARCA Y ENTREGA</span><h3>Preferencias de la tienda</h3><form id="settings-form" class="form-stack compact"><label>Nombre del comercio<input name="name" value="'+esc(s.name)+'" required maxlength="100"></label><label>Frase breve<input name="tagline" value="'+esc(s.tagline)+'" maxlength="160"></label><label>Color de marca<div class="color-control"><input name="color" type="color" value="'+esc(s.color)+'"><span>'+esc(s.color)+'</span></div></label><label>Tarifa de entrega en córdobas<input name="delivery_fee" type="number" min="0" step="0.01" value="'+(Number(s.delivery_fee)/100).toFixed(2)+'" required></label><label>Instrucciones de transferencia<textarea name="transfer_instructions" rows="3" maxlength="500">'+esc(s.transfer_instructions)+'</textarea></label><button class="btn btn-primary" type="submit">Guardar configuración</button></form></section><div class="settings-stack"><section class="panel"><span class="eyebrow">ENLACE PARA COMPARTIR</span><h3>Tu tienda ya tiene un enlace</h3><p class="muted">Podés enviarlo por WhatsApp, Messenger, Facebook o copiarlo en tus perfiles. El cliente compra desde el navegador.</p><div class="share-url"><code id="store-url">'+esc(location.origin+'/tienda.html?comercio='+s.slug)+'</code><button class="btn btn-outline btn-small" data-action="copy-store">Copiar enlace</button></div><div class="settings-payment"><b>Métodos de pago</b><div class="payment-line"><span>Efectivo al recibir</span><b class="text-success">Habilitado</b></div><div class="payment-line"><span>Transferencia</span><b>Confirmación manual</b></div><div class="payment-line"><span>Tarjetas</span><b>Pendiente del proveedor</b></div></div><p class="fine-print">Para pagos con tarjeta hace falta integrar y validar una pasarela/adquirente con contrato y credenciales del comercio. No se almacenan datos de tarjeta.</p></section><section class="panel"><span class="eyebrow">AUDITORÍA</span><h3>Actividad reciente</h3><ul class="audit-list">'+((activity||[]).map(function(x){return '<li><b>'+esc((x.action||"").replace(/_/g," "))+'</b><span>'+esc(x.entity_type)+" "+esc(x.entity_id)+" · "+esc(x.details)+" · "+date(x.created_at)+'</span></li>';}).join("")||'<li><span>Aún no hay cambios registrados.</span></li>')+'</ul></section></div></div>';
   }
   function storeShell(title, body, color) {
     document.documentElement.style.setProperty("--merchant", /^#[0-9a-f]{6}$/i.test(color||"")?color:"#155eef");
-    return shell('<main class="storefront"><div class="store-top"><div><a class="store-brand" href="?vista=tienda&amp;comercio='+encodeURIComponent(slug)+'"><span class="store-mark">✦</span><b>'+esc(title)+'</b></a><span class="store-caption">PEDIDOS DIRECTOS · NICARAGUA</span></div><a class="store-admin-link" href="?vista=admin">Acceso comercio</a></div>'+body+'</main>',"store");
+    return shell('<main class="storefront"><div class="store-top"><div><a class="store-brand" href="/tienda.html?comercio='+encodeURIComponent(slug)+'"><span class="store-mark">✦</span><b>'+esc(title)+'</b></a><span class="store-caption">PEDIDOS DIRECTOS · NICARAGUA</span></div><a class="store-admin-link" href="/admin.html">Acceso comercio</a></div>'+body+'</main>',"store");
   }
   async function startStore() {
-    endPoll();
+    endPoll();stopEventStream();
     try {
       var data=await api("/api/storefront?slug="+encodeURIComponent(slug));
       storeData=data;
       renderStore();
-      beginPoll(function(){api("/api/storefront?slug="+encodeURIComponent(slug)).then(function(x){storeData=x;renderStore();}).catch(function(){});},60);
-    } catch(err) { app.innerHTML=shell('<main class="error-page"><span class="eyebrow">TIENDA</span><h1>Este enlace no está disponible</h1><p>'+esc(err.message)+'</p><a class="btn btn-primary" href="?vista=admin">Volver al panel</a></main>',"store"); }
+      beginPoll(function(){api("/api/storefront?slug="+encodeURIComponent(slug)).then(function(x){storeData=x;renderStore();}).catch(function(){});},30);
+    } catch(err) { app.innerHTML=shell('<main class="error-page"><span class="eyebrow">TIENDA</span><h1>Este enlace no está disponible</h1><p>'+esc(err.message)+'</p><a class="btn btn-primary" href="/admin.html">Volver al panel</a></main>',"store"); }
   }
   function renderStore() {
     if(!storeData)return;
@@ -241,18 +265,18 @@
     var payload={slug:slug,customer_name:data.get("customer_name"),phone:data.get("phone"),address:data.get("address"),reference:data.get("reference"),payment_method:data.get("payment_method"),idempotency_key:pendingKey,items:Object.keys(cart).map(function(id){return {product_id:id,quantity:cart[id]};})};
     var result=await api("/api/orders",{method:"POST",body:payload});
     cart={};pendingKey="";
-    location.href="?vista=seguimiento&token="+encodeURIComponent(result.tracking_token);
+    location.href="/seguimiento.html?token="+encodeURIComponent(result.tracking_token);
   }
   async function startTracking() {
-    endPoll();
+    endPoll();stopEventStream();
     var token=params.get("token")||"";
     async function load() {
       try {
         var data=await api("/api/tracking?token="+encodeURIComponent(token));
         renderTracking(data);
-      } catch(err) { app.innerHTML=shell('<main class="error-page"><span class="eyebrow">SEGUIMIENTO</span><h1>No encontramos el pedido</h1><p>'+esc(err.message)+'</p><a class="btn btn-primary" href="?vista=tienda&amp;comercio='+encodeURIComponent(slug)+'">Ir a la tienda</a></main>'); }
+      } catch(err) { app.innerHTML=shell('<main class="error-page"><span class="eyebrow">SEGUIMIENTO</span><h1>No encontramos el pedido</h1><p>'+esc(err.message)+'</p><a class="btn btn-primary" href="/tienda.html?comercio='+encodeURIComponent(slug)+'">Ir a la tienda</a></main>'); }
     }
-    await load();beginPoll(load,10);
+    await load();connectEventStream("tracking",load,token);beginPoll(load,15);
   }
   function renderTracking(data) {
     var o=data.order,d=data.delivery,loc=data.location;
@@ -266,16 +290,16 @@
     } else if(d&&["accepted","picked_up","on_route"].includes(d.status)){
       locationHtml='<div class="location-wait"><span>⌖</span><p>El repartidor aún no comparte una ubicación reciente. El seguimiento de estado sigue activo.</p></div>';
     }
-    var body='<div class="tracking-wrap"><a class="back-link" href="?vista=tienda&amp;comercio='+encodeURIComponent(slug)+'">← Volver a la tienda</a><section class="tracking-card"><div class="tracking-head"><div><span class="eyebrow">SEGUIMIENTO DEL PEDIDO</span><h1>Pedido '+esc(o.id)+'</h1><p>El comercio actualizará el avance de tu compra desde su panel.</p></div><span class="badge badge-'+esc(o.status)+'">'+esc(statusLabel(o.status))+'</span></div><div class="timeline">'+timeline+'</div><div class="tracking-details"><div><span>Forma de pago</span><b>'+esc(o.payment_method==="cash"?"Efectivo al recibir":o.payment_method==="transfer"?"Transferencia":"Tarjeta")+' · '+esc(statusLabel(o.payment_state))+'</b></div><div><span>Total del pedido</span><b>'+money(o.total)+'</b></div><div><span>Recibido</span><b>'+date(o.created_at)+'</b></div></div>'+locationHtml+'<p class="refresh-note"><span class="live-pulse"></span>Se actualiza automáticamente cada 10 segundos.</p></section><p class="tracking-foot">Este enlace muestra solo el estado y el seguimiento autorizado de este pedido. Guardalo para volver a consultarlo.</p></div>';
+    var body='<div class="tracking-wrap"><a class="back-link" href="/tienda.html?comercio='+encodeURIComponent(slug)+'">← Volver a la tienda</a><section class="tracking-card"><div class="tracking-head"><div><span class="eyebrow">SEGUIMIENTO DEL PEDIDO</span><h1>Pedido '+esc(o.id)+'</h1><p>El comercio actualizará el avance de tu compra desde su panel.</p></div><span class="badge badge-'+esc(o.status)+'">'+esc(statusLabel(o.status))+'</span></div><div class="timeline">'+timeline+'</div><div class="tracking-details"><div><span>Forma de pago</span><b>'+esc(o.payment_method==="cash"?"Efectivo al recibir":o.payment_method==="transfer"?"Transferencia":"Tarjeta")+' · '+esc(statusLabel(o.payment_state))+'</b></div><div><span>Total del pedido</span><b>'+money(o.total)+'</b></div><div><span>Recibido</span><b>'+date(o.created_at)+'</b></div></div>'+locationHtml+'<p class="refresh-note"><span class="live-pulse"></span>Estado y ubicación se actualizan en vivo.</p></section><p class="tracking-foot">Este enlace muestra solo el estado y el seguimiento autorizado de este pedido. Guardalo para volver a consultarlo.</p></div>';
     app.innerHTML=shell('<main class="tracking-page">'+body+'</main>',"tracking");
   }
   async function startRider() {
-    endPoll();
+    endPoll();stopEventStream();
     var user;
     try{user=await getSession();}catch(_){user=null;}
     if(!user)return renderLogin("rider");
     if(user.role!=="courier"){app.innerHTML=shell('<main class="error-page"><h1>Esta cuenta no tiene perfil de repartidor</h1><p>Ingresá con una cuenta courier de este comercio.</p><button class="btn btn-outline" data-action="logout">Cerrar sesión</button></main>');return;}
-    riderUser=user;await renderRider();beginPoll(renderRider,12);
+    riderUser=user;await renderRider();connectEventStream("rider",renderRider);beginPoll(renderRider,15);
   }
   async function renderRider() {
     var result;
@@ -369,10 +393,10 @@
     var button=event.target.closest("[data-action],[data-section],[data-category]");
     if(!button)return;
     if(button.dataset.section){section=button.dataset.section;return renderAdmin();}
-    if(button.dataset.category){params.set("categoria",button.dataset.category);history.replaceState(null,"","?vista=tienda&comercio="+encodeURIComponent(slug)+"&categoria="+encodeURIComponent(button.dataset.category));return renderStore();}
+    if(button.dataset.category){params.set("categoria",button.dataset.category);history.replaceState(null,"","/tienda.html?comercio="+encodeURIComponent(slug)+"&categoria="+encodeURIComponent(button.dataset.category));return renderStore();}
     var action=button.dataset.action;
     try{
-      if(action==="logout"){await stopGps(true);await api("/api/logout",{method:"POST",body:{}});location.href=view==="reparto"?"?vista=reparto":"?vista=admin";}
+      if(action==="logout"){await stopGps(true);await api("/api/logout",{method:"POST",body:{}});location.href=view==="reparto"?"/?vista=reparto":"/admin.html";}
       if(action==="refresh")await renderAdmin();
       if(action==="cart-add"){var id=button.dataset.id;cart[id]=(cart[id]||0)+1;renderStore();}
       if(action==="cart-minus"){var cid=button.dataset.id;cart[cid]=Math.max(0,(cart[cid]||0)-1);if(!cart[cid])delete cart[cid];renderStore();}
@@ -418,4 +442,3 @@
   else if(view==="reparto")startRider();
   else startAdmin();
 })();
-

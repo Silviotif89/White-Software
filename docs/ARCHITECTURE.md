@@ -101,4 +101,3 @@ Antes de integrar, comparar proveedores disponibles para comercios nicaragüense
 - Integrar un proveedor real y validar callbacks firmados e idempotentes en sandbox y producción.
 - Crear app nativa o solución móvil adecuada y probar GPS con permiso, pantalla bloqueada, segundo plano, batería y pérdida de red.
 - Revisar privacidad, tratamiento de direcciones y retención de datos antes de usar pedidos reales.
-

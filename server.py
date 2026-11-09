@@ -62,6 +62,9 @@ CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id INTEGER 
 CREATE TABLE IF NOT EXISTS system_audit(
  id INTEGER PRIMARY KEY,tenant_id TEXT NOT NULL,actor_id INTEGER,action TEXT NOT NULL,entity_type TEXT NOT NULL,
  entity_id TEXT NOT NULL,details TEXT DEFAULT '',created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS tenant_events(
+ id INTEGER PRIMARY KEY AUTOINCREMENT,tenant_id TEXT NOT NULL,event_type TEXT NOT NULL,entity_id TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS tenant_events_cursor ON tenant_events(tenant_id,id);
 """
 
 def stamp():
@@ -120,13 +123,16 @@ def asdict(row):
 def audit(db,tenant,order,actor,kind,old="",new="",message="",idem=None):
     db.execute("INSERT OR IGNORE INTO order_events(tenant_id,order_id,actor_id,event_type,old_value,new_value,message,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
                (tenant,order,actor,kind,old,new,message[:500],idem,stamp()))
+    db.execute("INSERT INTO tenant_events(tenant_id,event_type,entity_id,created_at) VALUES(?,?,?,?)",(tenant,kind,order,stamp()))
 
 def audit_system(db,tenant,actor,action,entity,entity_id,details=""):
     db.execute("INSERT INTO system_audit(tenant_id,actor_id,action,entity_type,entity_id,details,created_at) VALUES(?,?,?,?,?,?,?)",
                (tenant,actor,action,entity,entity_id,details[:500],stamp()))
+    db.execute("INSERT INTO tenant_events(tenant_id,event_type,entity_id,created_at) VALUES(?,?,?,?)",(tenant,action,entity_id,stamp()))
 
 class App(BaseHTTPRequestHandler):
     server_version = "WhiteSoftware/0.1"
+    protocol_version = "HTTP/1.1"
     def log_message(self, fmt, *args):
         sys.stdout.write("[%s] %s\n" % (self.log_date_time_string(),fmt % args))
 
@@ -186,6 +192,8 @@ class App(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             url=urlparse(self.path); path=unquote(url.path); q=parse_qs(url.query)
+            if path=="/api/events":
+                return self.event_stream(q)
             with db_open() as db:
                 if path=="/api/health":
                     return self.json_out({"ok":True,"service":"white-software","database":"sqlite","card_payments":"pending_integration"})
@@ -283,6 +291,59 @@ class App(BaseHTTPRequestHandler):
         except Exception as exc:
             sys.stderr.write("GET error: %s\n"%exc)
             return self.error(500,"Ocurrió un error interno.","internal_error")
+
+    def event_stream(self,query):
+        token=query.get("token",[""])[0]
+        raw_cursor=self.headers.get("Last-Event-ID") or query.get("after",["0"])[0]
+        try:cursor=max(0,int(raw_cursor))
+        except ValueError:cursor=0
+        with db_open() as db:
+            if token:
+                order=db.execute("SELECT tenant_id,id FROM orders WHERE tracking_token=?",(token,)).fetchone()
+                if not order:return self.error(404,"No encontramos el seguimiento solicitado.","tracking_not_found")
+                tenant_id=order["tenant_id"];order_id=order["id"];role="customer";user_id=None
+            else:
+                user=self.current_user(db)
+                if not user:return self.error(401,"Iniciá sesión para recibir actualizaciones.","authentication_required")
+                tenant_id=user["tenant_id"];order_id=None;role=user["role"];user_id=user["id"]
+            if raw_cursor=="latest":
+                cursor=db.execute("SELECT COALESCE(MAX(id),0) AS id FROM tenant_events WHERE tenant_id=?",(tenant_id,)).fetchone()["id"]
+        self.send_response(200)
+        self.send_header("Content-Type","text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control","no-cache, no-transform")
+        self.send_header("Connection","keep-alive")
+        self.send_header("X-Accel-Buffering","no")
+        self.send_header("X-Content-Type-Options","nosniff")
+        self.send_header("Referrer-Policy","strict-origin-when-cross-origin")
+        self.end_headers()
+        self.wfile.write(("id: %d\nevent: ready\n\n"%cursor).encode("utf-8"))
+        self.wfile.flush()
+        started=time.monotonic();last_heartbeat=started
+        try:
+            while time.monotonic()-started<55:
+                with db_open() as db:
+                    if role=="customer":
+                        rows=db.execute("SELECT id,event_type,entity_id,created_at FROM tenant_events WHERE tenant_id=? AND entity_id=? AND id>? ORDER BY id LIMIT 100",(tenant_id,order_id,cursor)).fetchall()
+                    elif role=="courier":
+                        rows=db.execute("""SELECT e.id,e.event_type,e.entity_id,e.created_at FROM tenant_events e WHERE e.tenant_id=? AND e.id>?
+                            AND EXISTS(SELECT 1 FROM deliveries d WHERE d.tenant_id=e.tenant_id AND d.order_id=e.entity_id AND d.courier_id=?)
+                            ORDER BY e.id LIMIT 100""",(tenant_id,cursor,user_id)).fetchall()
+                    else:
+                        rows=db.execute("SELECT id,event_type,entity_id,created_at FROM tenant_events WHERE tenant_id=? AND id>? ORDER BY id LIMIT 100",(tenant_id,cursor)).fetchall()
+                    latest=db.execute("SELECT COALESCE(MAX(id),?) AS id FROM tenant_events WHERE tenant_id=?",(cursor,tenant_id)).fetchone()["id"]
+                for row in rows:
+                    cursor=row["id"]
+                    payload=json.dumps({"id":cursor,"type":row["event_type"],"entity_id":row["entity_id"],"created_at":row["created_at"]},ensure_ascii=False,separators=(",",":"))
+                    self.wfile.write(("id: %d\nevent: update\ndata: %s\n\n"%(cursor,payload)).encode("utf-8"))
+                if latest>cursor:
+                    cursor=latest
+                if time.monotonic()-last_heartbeat>=15:
+                    self.wfile.write(b": keep-alive\n\n")
+                    last_heartbeat=time.monotonic()
+                self.wfile.flush()
+                time.sleep(1)
+        except (BrokenPipeError,ConnectionResetError,TimeoutError):
+            return
 
     def do_POST(self):
         try:
@@ -439,6 +500,7 @@ class App(BaseHTTPRequestHandler):
                     if not d or d["status"]!="on_route" or not d["sharing_location"]:return self.error(409,"La ubicación solo se guarda si el repartidor activa compartir durante su ruta.","location_not_active")
                     now=stamp()
                     db.execute("INSERT INTO locations(tenant_id,order_id,courier_id,latitude,longitude,accuracy,recorded_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",(u["tenant_id"],oid,u["id"],lat,lon,accuracy,now,int(time.time())+21600))
+                    db.execute("INSERT INTO tenant_events(tenant_id,event_type,entity_id,created_at) VALUES(?,?,?,?)",(u["tenant_id"],"rider_location",oid,now))
                     db.execute("DELETE FROM locations WHERE expires_at<?",(int(time.time()),))
                     return self.json_out({"ok":True,"recorded_at":now})
             return self.error(404,"Ruta API no encontrada.","not_found")
@@ -452,7 +514,7 @@ class App(BaseHTTPRequestHandler):
             return self.error(500,"Ocurrió un error interno.","internal_error")
 
     def static(self,path):
-        allowed={"","/","/index.html","/connected.css","/connected.js","/manifest.webmanifest","/sw.js","/icon.svg"}
+        allowed={"","/","/index.html","/admin.html","/tienda.html","/seguimiento.html","/connected.css","/connected.js","/manifest.webmanifest","/sw.js","/icon.svg"}
         if path not in allowed:return self.error(404,"Archivo no encontrado.","not_found")
         rel="index.html" if path in ("","/") else path.lstrip("/")
         target=(ROOT/rel).resolve()
@@ -471,8 +533,10 @@ class App(BaseHTTPRequestHandler):
 def main():
     if HOST not in ("127.0.0.1","localhost","::1"):
         passwords=[os.environ.get("WHITE_ADMIN_PASSWORD",""),os.environ.get("WHITE_DISPATCHER_PASSWORD",""),os.environ.get("WHITE_COURIER_PASSWORD","")]
-        if any(len(password)<12 or password=="Demo123!" for password in passwords) or os.environ.get("WHITE_COOKIE_SECURE")!="1":
-            raise SystemExit("Al exponer fuera de localhost configura claves distintas de 12+ caracteres para los tres roles y WHITE_COOKIE_SECURE=1. No uses esta demo directamente en internet.")
+        if any(len(password)<12 or password=="Demo123!" for password in passwords):
+            raise SystemExit("Al exponer fuera de localhost configura claves distintas de 12+ caracteres para los tres roles.")
+        if os.environ.get("WHITE_COOKIE_SECURE")!="1" and os.environ.get("WHITE_ALLOW_INSECURE_LAN")!="1":
+            raise SystemExit("Al exponer fuera de localhost activa HTTPS con WHITE_COOKIE_SECURE=1. WHITE_ALLOW_INSECURE_LAN=1 es solo para una prueba en Wi-Fi privada.")
     init_db()
     def cleanup_expired_locations():
         while True:
@@ -480,6 +544,8 @@ def main():
             try:
                 with db_open() as cleanup_db:
                     cleanup_db.execute("DELETE FROM locations WHERE expires_at<?",(int(time.time()),))
+                    cutoff=datetime.fromtimestamp(time.time()-30*86400,timezone.utc).isoformat(timespec="seconds")
+                    cleanup_db.execute("DELETE FROM tenant_events WHERE created_at<?",(cutoff,))
             except Exception as exc:
                 sys.stderr.write("Location cleanup failed: %s\n"%exc)
     threading.Thread(target=cleanup_expired_locations,daemon=True).start()
@@ -487,10 +553,11 @@ def main():
     print("White Software en http://%s:%d"% (HOST,PORT))
     print("Base local: %s"%DB_PATH)
     print("MVP de demostración. Antes de internet: HTTPS, credenciales propias, revisión de seguridad y despliegue preparado.")
+    if HOST not in ("127.0.0.1","localhost","::1") and os.environ.get("WHITE_ALLOW_INSECURE_LAN")=="1":
+        print("AVISO: modo HTTP de desarrollo para red LAN privada. No sirve para una red pública.")
     try:server.serve_forever()
     except KeyboardInterrupt:print("\nServidor detenido.")
     finally:server.server_close()
 
 if __name__=="__main__":
     main()
-
