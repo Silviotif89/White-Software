@@ -13,7 +13,7 @@
       area: 'Managua, Nicaragua',
       phone: '2255 0148',
       deliveryFee: 45,
-      color: '#176b5c'
+      color: '#0867f9'
     },
     products: [
       { id: 'p1', name: 'Café molido de Matagalpa', size: 'Bolsa · 500 g', price: 185, category: 'Abarrotes', icon: '☕', badge: 'Favorito', active: true, stock: 18 },
@@ -42,7 +42,9 @@
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
       if (saved && saved.company && Array.isArray(saved.products) && Array.isArray(saved.orders)) {
-        return { ...structuredClone(seed), ...saved, company: { ...seed.company, ...saved.company } };
+        const company = { ...seed.company, ...saved.company };
+        if (String(company.color).toLowerCase() === '#176b5c') company.color = seed.company.color;
+        return { ...structuredClone(seed), ...saved, company };
       }
     } catch (_) { /* storage can be unavailable in a restricted browser */ }
     return structuredClone(seed);
